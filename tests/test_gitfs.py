@@ -9,20 +9,20 @@ from nose.plugins.attrib import attr
 
 from fs.test import FSTestCases
 from fs_gitfs import GITFS
-from fs.osfs import OSFS
+import tempfile
 
 
 class TestGITFS(FSTestCases, unittest.TestCase):
     """Test GITFS implementation from dir_path."""
 
     git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
-    local_dir = "C:\\Users\\jdonnerstag\\AppData\\Local\\Temp\\tmp61bvh65m"
+    local_dir = tempfile.mkdtemp()
 
     def make_fs(self):
-        self._delete_contents()
         return GITFS(self.git_repo, local_dir=self.local_dir)
 
-    def _delete_contents(self):
+    def destroy_fs(self, fs):
+        super(TestGITFS, self).destroy_fs(fs)
         shutil.rmtree(self.local_dir)
 
 '''
