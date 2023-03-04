@@ -1,6 +1,6 @@
 # coding: utf-8
 
-__all__ = ["GITFS"]
+__all__ = ["GITFS", "GitException"]
 
 import os
 import stat
@@ -256,19 +256,19 @@ class GITFS(OSFS):
 		try:
 			self.git_exec(["clone", new_url], True)
 		except Exception as exc:
-			raise GitException(f"Git: Unable to clone git repo: {git_url}") from exc
+			raise GitException(f"Git: Unable to clone git repo: '{git_url}'") from exc
 
 	def git_checkout_branch(self, branch: str):
 		try:
 			self.git_exec(["checkout", branch])
 		except Exception as exc:
-			raise GitException(f"Git: Failed to checkout branch: {branch}") from exc
+			raise GitException(f"Git: Failed to checkout branch: '{branch}'") from exc
 
 	def git_checkout_revision(self, revision: str):
 		try:
 			self.git_exec(["reset", "--hard", revision])
 		except Exception as exc:
-			raise GitException(f"Git: Failed to checkout revision: {revision}") from exc
+			raise GitException(f"Git: Failed to checkout revision: '{revision}'") from exc
 
 	def git_pull(self):
 		"""Git Fetch and merge"""
@@ -276,17 +276,16 @@ class GITFS(OSFS):
 			self.git_exec(["pull"])
 		except Exception as exc:
 			cwd = self.local_dir.joinpath(self.repo_name)
-			raise GitException(f"Git: Failed to pull (update) git repo: {cwd}") from exc
+			raise GitException(f"Git: Failed to pull (update) git repo: '{cwd}'") from exc
 
 	def determine_revision(self, effective_date: datetime, branch: None | str):
 		"""Determine which revision was effective in the branch at that time"""
 
-		cmd = ["rev-list", "-n", "1"]
 		# git rev-list -n 1 --before="2018-09-01 23:59:59" master
 		# str() convert datetime nicely into "2018-09-01 23:59:59"
 		date = str(effective_date)
 		date = date.replace("9999-", "2099-")
-		cmd += [f'--before="{date}"']
+		cmd = ["rev-list", "--max-count=1", f'--before="{date}"']
 
 		if branch:
 			cmd += [branch]
@@ -294,7 +293,36 @@ class GITFS(OSFS):
 		try:
 			return self.git_exec(cmd)
 		except Exception as exc:
-			raise GitException(f"Git: Unable to determine revision by date: {effective_date}, branch: {branch}") from exc
+			raise GitException(f"Git: Unable to determine revision by date: '{effective_date}', branch: '{branch}'") from exc
+
+	def current_branch(self) -> str:
+		"""Determine the current branch name: git rev-parse --abbrev-ref HEAD
+
+		Which is the same as 'git branch --show-current' since git 2.22
+		"""
+
+		cmd = ["rev-parse", "--abbrev-ref", "HEAD"]
+		try:
+			return self.git_exec(cmd)
+		except Exception as exc:
+			raise GitException(f"Git: Unable to determine current branch") from exc
+
+
+	def current_revision(self, short: bool=True) -> str:
+		"""Determine the current branch name: git rev-parse HEAD
+
+		Which is the same as 'git branch --show-current' since git 2.22
+		"""
+
+		if short:
+			cmd = ["rev-parse", "--short", "HEAD"]
+		else:
+			cmd = ["rev-parse", "HEAD"]
+
+		try:
+			return self.git_exec(cmd)
+		except Exception as exc:
+			raise GitException(f"Git: Unable to determine current revision") from exc
 
 	def delete_local_clone(self):
 		"""Local the local git clone (remove the directory)"""

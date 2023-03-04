@@ -5,11 +5,11 @@ from __future__ import unicode_literals
 import unittest
 import pathlib
 import shutil
-
+from datetime import datetime
 from nose.plugins.attrib import attr
 
 from fs.test import FSTestCases
-from fs_gitfs import GITFS
+from fs_gitfs import GITFS, GitException
 import tempfile
 
 
@@ -69,7 +69,7 @@ class Testing(unittest.TestCase):
 		local_dir = tempfile.mkdtemp()
 		fs = None
 		try:
-			with self.assertRaises(ChildProcessError) as context:
+			with self.assertRaises(GitException) as context:
 				fs = GITFS("https://wrong.com/does_not_exist", local_dir=local_dir)
 		finally:
 			shutil.rmtree(local_dir)
@@ -83,15 +83,45 @@ class Testing(unittest.TestCase):
 			assert fs.branch == branch
 			assert fs.revision is None
 			assert repr(fs) == f"GITFS('https://github.com/jdonnerstag/py_gitfs.git', branch='{branch}')"
+
+			# Use git to determine the current branch
+			assert branch == fs.current_branch()
 		finally:
 			if fs:
 				fs.delete_local_clone()
 
 	def test_revision_param(self):
-		pass
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			revision = "dc587fe"
+			fs = GITFS(self.git_repo, local_dir=local_dir, branch=f"rev:{revision}")
+			assert fs.branch is None
+			assert fs.revision == "dc587fe"
+			assert repr(fs) == f"GITFS('https://github.com/jdonnerstag/py_gitfs.git', revision='{revision}')"
+
+			# Use git to determine the current branch
+			assert revision == fs.current_revision()
+		finally:
+			if fs:
+				fs.delete_local_clone()
 
 	def test_eff_date_param(self):
-		pass
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			effective_date = datetime(2023, 3, 5)
+			fs = GITFS(self.git_repo, local_dir=local_dir, branch="test", effective_date=effective_date)
+			assert fs.branch == "test"
+			assert fs.revision == "dc587fe"
+			assert repr(fs) == f"GITFS('https://github.com/jdonnerstag/py_gitfs.git', revision='{fs.revision}')"
+
+			# Use git to determine the current branch
+			assert fs.current_branch() == "test"
+			assert fs.current_revision() == "dc587fe"
+		finally:
+			if fs:
+				fs.delete_local_clone()
 
 	def test_evict(self):
 		pass
