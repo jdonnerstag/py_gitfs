@@ -1,6 +1,6 @@
 # coding: utf-8
 
-__all__ = ["GITFS", "GitException"]
+__all__ = ["GITFS", "GitException", "delete_repo"]
 
 import os
 import stat
@@ -18,6 +18,16 @@ from fs.osfs import OSFS
 
 
 logger = logging.getLogger(name="git")
+
+
+def delete_repo(local_dir: str):
+	def del_rw(action, name, exc):
+		# Delete readonly files
+		os.chmod(name, stat.S_IWRITE)
+		os.remove(name)
+
+	if os.path.exists(local_dir):
+		shutil.rmtree(local_dir, onerror=del_rw)
 
 class GitException(Exception):
 	pass
@@ -108,28 +118,28 @@ class GITFS(OSFS):
 	`PyFilesystem2 <https://pyfilesystem.org>`_
 
 	:param str git_url: The got repository (url or directory)
-	:param str branch: git branch name or revision string (default: 'master')
+	:param str branch: git branch name, release-tag or revision string (default: 'master')
 	:param str access_token: github (user) access token
 	:param Datetime effective_date: Determine the last revision prior to the datetime (default: none)
-	:param int evict_after: update (fetch + merge) the cloned repo latest after X secs (default: 3600 secs).
-	:param int depth: number of revisions to clone (default: 1)
 	:param bool create: If true, then create the directory (default: True)
 	:param int create_mode: If the directory must be created, apply the directory permissions (rwxrwxrwx)
 	:param bool expand_vars: If true, expand any environment vars, e.g. $HOME/...
+	:param bool auto_delete: if true, the local directory gets deleted upon close()
 
 	"""
 	def __init__(self,
 		git_url: str,
+		*,
 		branch: str = 'master',
+		revision: str|None = None,
 		access_token: str|None = os.environ.get("GIT_ACCESS_TOKEN", None),
 		local_dir: os.PathLike = tempfile.mkdtemp(),
 		effective_date: datetime|None = None,
-		evict_after: int|None = 3600,
-		depth: int|None = 1,
 		git_exe: str = "git",
 		create: bool = True,
 		create_mode: int = 0o777,
 		expand_vars: bool = True,
+		auto_delete: bool = True,
 		_test: bool = False
 	):
 
@@ -141,22 +151,6 @@ class GITFS(OSFS):
 		self.repo_name = req.path
 		if self.repo_name.endswith(".git"):
 			self.repo_name = os.path.basename(self.repo_name)[:-4]
-
-		revision: str|None = None
-		if req.query:
-			params = urllib.parse.parse_qs(req.query)
-			branch = params.get("branch", branch)
-			revision = params.get("revision", revision)
-
-		if branch.startswith("rev:"):
-			revision = branch[4:]
-			branch = None
-
-		if branch:
-			revision = None
-
-		if revision:
-			branch = None
 
 		if req.username:
 			access_token = req.username
@@ -186,9 +180,8 @@ class GITFS(OSFS):
 		self.revision = revision
 		self.local_dir = Path(local_dir)
 		self.effective_date = effective_date
-		self.evict_after = evict_after
-		self.depth = depth
 		self.git_exe = git_exe
+		self.auto_delete = auto_delete
 
 		if not _test:
 			self.update()
@@ -209,18 +202,36 @@ class GITFS(OSFS):
 
 		# Clone or refresh the local git repo
 		git_dir = self.local_dir.joinpath(self.repo_name, ".git")
-		if not git_dir.is_dir():
-			self.git_clone(self.git_url)
+		if git_dir.is_dir():
+			if self.branch:
+				current_branch = self.current_branch()
+				if current_branch != self.branch:
+					raise GitException(f"Existing git repo and GITFS config don't match: {current_branch} != {self.branch}")
+
+			# Determine the revision, if an effective date was provided
+			if self.effective_date:
+				self.revision = self.determine_revision(self.effective_date, self.branch)
+
+			if self.revision:
+				current_revision = self.current_revision()
+				if current_revision != self.revision:
+					raise GitException(f"Existing git repo and GITFS config don't match: {current_revision} != {self.revision}")
+
+			return
+
+		# We can clone and checkout in one go, except if it is a revision
+		branch = None if self.effective_date or self.revision else self.branch
+		self.git_clone(self.git_url, branch)
 
 		# Determine the revision, if an effective date was provided
-		if self.effective_date and not self.revision:
+		if self.effective_date:
 			self.revision = self.determine_revision(self.effective_date, self.branch)
 
-		# Either checkout branch or revision
+		# Note that git clone support branch names and release tags, but no
+		# revisions. Whereas checkout also supports revisions.
 		if self.revision:
-			self.git_checkout_revision(self.revision)
-		else:
-			self.git_checkout_branch(self.branch)
+			self.git_checkout(self.revision)
+
 
 	def git_exec(self, git_args: list[str], repo_parent: bool = False):
 		"""Execute git applying the 'git_args' in the directory specified"""
@@ -237,10 +248,8 @@ class GITFS(OSFS):
 	def _get_access_token(self) -> str:
 		return decode_access_token(self.access_token)
 
-	def git_clone(self, git_url: SplitResult|str):
+	def git_clone(self, git_url: SplitResult|str, branch: str|None):
 		"""Clone the repo"""
-
-		# Github does not support "git archive --remote=http://".
 
 		if isinstance(git_url, str):
 			git_url = urllib.parse.urlsplit(git_url)
@@ -253,12 +262,17 @@ class GITFS(OSFS):
 		req = self.replace_access_token(git_url, access_token)
 		new_url = req.geturl()
 
+		if branch:
+			cmd = ["clone", new_url, "--depth", "1", "--branch", branch]
+		else:
+			cmd = ["clone", new_url]
+
 		try:
-			self.git_exec(["clone", new_url], True)
+			self.git_exec(cmd, True)
 		except Exception as exc:
 			raise GitException(f"Git: Unable to clone git repo: '{git_url}'") from exc
 
-	def git_checkout_branch(self, branch: str):
+	def git_checkout(self, branch: str):
 		try:
 			self.git_exec(["checkout", branch])
 		except Exception as exc:
@@ -270,13 +284,17 @@ class GITFS(OSFS):
 		except Exception as exc:
 			raise GitException(f"Git: Failed to checkout revision: '{revision}'") from exc
 
-	def git_pull(self):
-		"""Git Fetch and merge"""
+	def git_archive(self, branch: str):
+		# Note: github's implementation of git, does NOT SUPPORT it
+
+		access_token = self._get_access_token()
+		req = self.replace_access_token(self.git_url, access_token)
+		new_url = req.geturl()
+
 		try:
-			self.git_exec(["pull"])
+			self.git_exec(["archive", "--format=tar", f"--prefix={self.repo_name}/", f"--remote={new_url}", branch], True)
 		except Exception as exc:
-			cwd = self.local_dir.joinpath(self.repo_name)
-			raise GitException(f"Git: Failed to pull (update) git repo: '{cwd}'") from exc
+			raise GitException(f"Git: Failed to export branch: '{branch}'") from exc
 
 	def determine_revision(self, effective_date: datetime, branch: None | str):
 		"""Determine which revision was effective in the branch at that time"""
@@ -288,7 +306,7 @@ class GITFS(OSFS):
 		cmd = ["rev-list", "--max-count=1", f'--before="{date}"']
 
 		if branch:
-			cmd += [branch]
+			cmd += [f'origin/{branch}']
 
 		try:
 			return self.git_exec(cmd)
@@ -300,6 +318,12 @@ class GITFS(OSFS):
 
 		Which is the same as 'git branch --show-current' since git 2.22
 		"""
+
+		# For effective-date we clone/checkout the branch, then we determine the
+		# revision number and checkout it out. Git checkout does print the message that
+		# HEAD is now detached, but rev-parse is still providing the branch name.
+		if self.effective_date:
+			return "HEAD"
 
 		cmd = ["rev-parse", "--abbrev-ref", "HEAD"]
 		try:
@@ -324,20 +348,33 @@ class GITFS(OSFS):
 		except Exception as exc:
 			raise GitException(f"Git: Unable to determine current revision") from exc
 
-	def delete_local_clone(self):
-		"""Local the local git clone (remove the directory)"""
+	def is_detached(self) -> bool:
+		"""Check whether the files are detached or related to a branch"""
 
-		def del_rw(action, name, exc):
-			# Delete readonly files
-			os.chmod(name, stat.S_IWRITE)
-			os.remove(name)
+		# For effective-date we clone/checkout the branch, then we determine the
+		# revision number and checkout it out. Git checkout does print the message that
+		# HEAD is now detached, but rev-parse is still providing the branch name.
+		if self.effective_date:
+			return True
 
-		shutil.rmtree(self.local_dir, onerror=del_rw)
+		cmd = ["rev-parse", "--symbolic-full-name", "HEAD"]
+
+		try:
+			rtn = self.git_exec(cmd).strip()
+			return rtn == "HEAD"
+		except Exception as exc:
+			raise GitException(f"Git: Unable to determine current revision") from exc
+
+	def close(self):
+		if self.auto_delete:
+			delete_repo(self.local_dir)
+
+		return super().close()
 
 	def __repr__(self):
 		return _make_repr(
 			self.__class__.__name__,
 			self.git_url.geturl(),
 			branch=(self.branch, None),
-			revision=(self.revision, None),
+			effective_date=(self.effective_date, None)
 		)

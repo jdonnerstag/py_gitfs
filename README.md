@@ -1,14 +1,29 @@
 # GITFS
 
-GITFS is a [PyFilesystem](https://www.pyfilesystem.org/) interface to
-git repositories (storage).
+Sometimes our applications require files (e.g. configs) which
+are stored in a git repository. Different environments may use different
+git repos, branches or release-tags, and sometimes we need the configs from
+within a specific branch, but committed before a specific date/time.
 
-As a PyFilesystem concrete class, [GITFS](http://fs-gitfs.readthedocs.io/en/latest/) allows
-you to work with git repository file in the same way as any other supported filesystem.
+[PyFilesystem](https://www.pyfilesystem.org/) is a Python module that provides
+a common interface to any filesystem.
+
+[GITFS](http://fs-gitfs.readthedocs.io/en/latest/) extends
+[PyFilesystem](https://www.pyfilesystem.org/) and provides *read-only* access
+to files stored in a git repository.
+
+GITFS 'exports' the files related to a branch, release-tag or revision into a
+temporary local directory or filesystem (e.g. in-memory filesystem), where they
+can easily be accessed by our application. By default, this directory is
+auto-deleted upon closing the GITFS.
+
+With our use cases, we do not need a full clone of the git repository. We just
+need the files related to a branch, release-tag or revision. Which is why we
+try to export only the files needed from the remote repository.
 
 ## Installing
 
-You can install GITFS from pip as follows:
+Install GITFS with pip as follows:
 
 ```
 pip install fs-gitfs
@@ -16,52 +31,43 @@ pip install fs-gitfs
 
 ## Opening a GITFS
 
-Open an GITFS by explicitly using the constructor:
+Open a GITFS by explicitly using the constructor:
 
 ```python
 from fs_gitfs import GITFS
-gitfs = GITFS('myrepo')
+
+gitfs = GITFS('https://github.com/myname/myrepo.git')
+gitfs = GITFS('/home/me/my_existing_repo')
+gitfs = GITFS('/home/me/my_existing_repo', branch="system_test")
+gitfs = GITFS('/home/me/my_existing_repo', release="v1.0.0")
+gitfs = GITFS('/home/me/my_existing_repo', branch="master", before=datetime(2021, 2, 3))
+gitfs = GITFS('/home/me/my_existing_repo', local_dir="/home/configs", auto_delete=False)
+
 ```
 
 Or with a FS URL:
 
 ```python
   from fs import open_fs
-  gitfs = open_fs('git://myrepo')
+
+  gitfs = open_fs('git://github.com/myname/myrepo.git')
+  gitfs = open_fs('git:/home/me/my_existing_repo?branch=system_test')
+  gitfs = open_fs('git:/home/me/my_existing_repo?release=v1.0.0')
+  gitfs = open_fs('git:/home/me/my_existing_repo?branch=master&before=2021-02-03')
 ```
 
-## Downloading Files
-
-To *download* files from a git repository, open a file on the S3
-filesystem for reading, then write the data to a file on the local
-filesystem. Here's an example that copies a file `example.mov` from
-S3 to your HD:
-
-```python
-from fs.tools import copy_file_data
-with gitfs.open('example.mov', 'rb') as remote_file:
-    with open('example.mov', 'wb') as local_file:
-        copy_file_data(remote_file, local_file)
-```
-
-Although it is preferable to use the higher-level functionality in the
-`fs.copy` module. Here's an example:
-
-```python
-from fs.copy import copy_file
-copy_file(gitfs, 'example.mov', './', 'example.mov')
-```
-
-## ExtraArgs
+Once created, the GITFS object should not be changed, e.g. change the branch.
+Rather create a new GITFS.
 
 
 ## Dev Install
 
-git clone ...
+git clone https://github.com/jdonnerstag/py_gitfs.git
+python -m venv .venv
+.venv/scripts/activate
 pip install -e .[dev]
 
 ## Documentation
 
 - [PyFilesystem Wiki](https://www.pyfilesystem.org)
-- [GITFS Reference](http://fs-gitfs.readthedocs.io/en/latest/)
 - [PyFilesystem Reference](https://docs.pyfilesystem.org/en/latest/reference/base.html)
