@@ -3,6 +3,7 @@
 from __future__ import unicode_literals
 
 import unittest
+import pathlib
 import shutil
 
 from nose.plugins.attrib import attr
@@ -13,67 +14,87 @@ import tempfile
 
 
 class TestGITFS(FSTestCases, unittest.TestCase):
-    """Test GITFS implementation from dir_path."""
+	"""GITFS is based on OSFS and exposes a local directory. It should
+	easily pass all standard tests
+	"""
 
-    git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
-    local_dir = tempfile.mkdtemp()
+	git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
 
-    def make_fs(self):
-        return GITFS(self.git_repo, local_dir=self.local_dir)
+	def make_fs(self):
+		local_dir = tempfile.mkdtemp()
 
-    def destroy_fs(self, fs):
-        super(TestGITFS, self).destroy_fs(fs)
-        shutil.rmtree(self.local_dir)
+		# _test=True Do not clone or update the repo
+		return GITFS(self.git_repo, local_dir=local_dir, _test=True)
 
-'''
-@attr("slow")
-class TestGITFSSubDir(FSTestCases, unittest.TestCase):
-    """Test GITFS implementation from dir_path."""
-
-    git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
-
-    def make_fs(self):
-        self._delete_bucket_contents()
-        self.s3.Object(self.bucket_name, "subdirectory").put()
-        return GITFS(self.bucket_name, dir_path="subdirectory")
-
-    def _delete_bucket_contents(self):
-        response = self.client.list_objects(Bucket=self.bucket_name)
-        contents = response.get("Contents", ())
-        for obj in contents:
-            self.client.delete_object(Bucket=self.bucket_name, Key=obj["Key"])
+	def destroy_fs(self, fs: GITFS):
+		fs.delete_local_clone()
+		super().destroy_fs(fs)
 
 
-class TestGITFSHelpers(unittest.TestCase):
-    def test_path_to_key(self):
-        s3 = GITFS("foo")
-        self.assertEqual(s3._path_to_key("foo.bar"), "foo.bar")
-        self.assertEqual(s3._path_to_key("foo/bar"), "foo/bar")
+class Testing(unittest.TestCase):
+	git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
 
-    def test_path_to_key_subdir(self):
-        s3 = GITFS("foo", "/dir")
-        self.assertEqual(s3._path_to_key("foo.bar"), "dir/foo.bar")
-        self.assertEqual(s3._path_to_key("foo/bar"), "dir/foo/bar")
+	def test_git_simple(self):
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			fs = GITFS(self.git_repo, local_dir=local_dir)
+			assert fs.git_url.geturl() == "https://github.com/jdonnerstag/py_gitfs.git"
+			assert fs.access_token is None
+			assert fs.branch == "master"
+			assert fs.revision is None
+			assert fs.local_dir == pathlib.Path(local_dir)
+			assert fs.effective_date is None
+			assert fs.evict_after == 3600
+			assert fs.depth == 1
+			assert fs.git_exe is not None
+			assert repr(fs) == "GITFS('https://github.com/jdonnerstag/py_gitfs.git', branch='master')"
+		finally:
+			if fs:
+				fs.delete_local_clone()
 
-    def test_upload_args(self):
-        s3 = GITFS("foo", acl="acl", cache_control="cc")
-        self.assertDictEqual(
-            s3._get_upload_args("test.jpg"),
-            {"ACL": "acl", "CacheControl": "cc", "ContentType": "image/jpeg"},
-        )
-        self.assertDictEqual(
-            s3._get_upload_args("test.mp3"),
-            {"ACL": "acl", "CacheControl": "cc", "ContentType": "audio/mpeg"},
-        )
-        self.assertDictEqual(
-            s3._get_upload_args("test.json"),
-            {"ACL": "acl", "CacheControl": "cc", "ContentType": "application/json"},
-        )
-        self.assertDictEqual(
-            s3._get_upload_args("unknown.unknown"),
-            {"ACL": "acl", "CacheControl": "cc", "ContentType": "binary/octet-stream"},
-        )
-'''
+	def test_access_token(self):
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			access_token = "abc"
+			fs = GITFS(self.git_repo, local_dir=local_dir, access_token=access_token)
+			assert access_token != fs.access_token
+			assert access_token == fs._get_access_token()
+		finally:
+			if fs:
+				fs.delete_local_clone()
 
-if __name__ == '__main__':
-    unittest.main()
+	def test_invalid_url(self):
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			with self.assertRaises(ChildProcessError) as context:
+				fs = GITFS("https://wrong.com/does_not_exist", local_dir=local_dir)
+		finally:
+			shutil.rmtree(local_dir)
+
+	def test_branch_param(self):
+		local_dir = tempfile.mkdtemp()
+		fs = None
+		try:
+			branch = "test"
+			fs = GITFS(self.git_repo, local_dir=local_dir, branch=branch)
+			assert fs.branch == branch
+			assert fs.revision is None
+			assert repr(fs) == f"GITFS('https://github.com/jdonnerstag/py_gitfs.git', branch='{branch}')"
+		finally:
+			if fs:
+				fs.delete_local_clone()
+
+	def test_revision_param(self):
+		pass
+
+	def test_eff_date_param(self):
+		pass
+
+	def test_evict(self):
+		pass
+
+	def test_depth(self):
+		pass

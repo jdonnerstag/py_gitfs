@@ -1,15 +1,14 @@
 # coding: utf-8
 """Defines the GITFS Opener."""
 
-from __future__ import absolute_import
-from __future__ import print_function
-from __future__ import unicode_literals
-
 __all__ = ["GITFSOpener"]
 
 import os
 import tempfile
 from datetime import datetime
+from urllib.parse import ParseResult
+
+from typing import Text
 
 from fs.opener import Opener
 from fs.opener.errors import OpenerError
@@ -29,6 +28,7 @@ class GITFSOpener(Opener):
         cwd,  # type: Text
     ):
 
+        # TODO only copy and paste so far. Make up your mind and implement ...
         git_url, _, branch = parse_result.resource.partition("/")
 
         if not git_url:

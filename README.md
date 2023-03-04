@@ -55,6 +55,11 @@ copy_file(gitfs, 'example.mov', './', 'example.mov')
 ## ExtraArgs
 
 
+## Dev Install
+
+git clone ...
+pip install -e .[dev]
+
 ## Documentation
 
 - [PyFilesystem Wiki](https://www.pyfilesystem.org)
