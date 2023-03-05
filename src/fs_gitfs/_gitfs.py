@@ -18,7 +18,7 @@ from fs.osfs import OSFS
 
 from dulwich.repo import Repo
 from dulwich.client import HttpGitClient
-from dulwich.porcelain import clone as git_clone, NoneStream
+from dulwich.porcelain import clone as git_clone, NoneStream, open_repo_closing, describe, find_unique_abbrev, active_branch, reset
 
 logger = logging.getLogger(name="git")
 
@@ -190,6 +190,9 @@ class GITFS(OSFS):
 
 		super(GITFS, self).__init__(self.local_dir, create=create, create_mode=create_mode, expand_vars=expand_vars)
 
+	def repo_dir(self) -> Path:
+		return self.local_dir.joinpath(self.repo_name)
+
 	def replace_access_token(self, req: SplitResult, token: str|None) -> SplitResult:
 		"""
 		Replace the access-token (or username/password) in the URL
@@ -232,7 +235,7 @@ class GITFS(OSFS):
 		# Note that git clone support branch names and release tags, but no
 		# revisions. Whereas checkout also supports revisions.
 		if self.revision:
-			self.git_checkout(self.revision)
+			self.git_checkout_revision(self.revision)
 
 
 	def git_exec(self, git_args: list[str], repo_parent: bool = False):
@@ -241,7 +244,7 @@ class GITFS(OSFS):
 		if repo_parent:
 			cwd = self.local_dir
 		else:
-			cwd = self.local_dir.joinpath(self.repo_name)
+			cwd = self.repo_dir()
 
 		cmd = [self.git_exe] + git_args
 		return execute_child_process(cmd, cwd)
@@ -261,7 +264,7 @@ class GITFS(OSFS):
 			raise GitException(f"Git: Local git repo already exists: {git_dir}")
 
 		access_token = self._get_access_token()
-		repo_dir = self.local_dir.joinpath(self.repo_name)
+		repo_dir = self.repo_dir()
 		depth = None
 		if branch:
 			depth = 1
@@ -277,7 +280,7 @@ class GITFS(OSFS):
 				password=access_token,
 				errstream=NoneStream()
 			) as repo:
-				
+
 				index = repo.open_index()
 				print(index.path)
 
@@ -290,11 +293,37 @@ class GITFS(OSFS):
 		except Exception as exc:
 			raise GitException(f"Git: Failed to checkout branch: '{branch}'") from exc
 
+	def find_sha1(self, short: str | bytes) -> bytes:
+		if len(short) >= 20:
+			return [short]
+
+		if isinstance(short, str):
+			short = short.encode("utf-8")
+
+		objs = []
+		with open_repo_closing(self.repo_dir()) as repo:
+			for obj in repo.object_store:
+				if obj[:len(short)] == short:
+					objs.append(obj)
+
+		if not objs:
+			raise GitException(f"Git object not found: '{short}'")
+		elif len(objs) != 1:
+			raise GitException(f"Found multiple Git objects: '{objs}'")
+
+		return objs[0]
+
+
 	def git_checkout_revision(self, revision: str):
 		try:
 			self.git_exec(["reset", "--hard", revision])
 		except Exception as exc:
 			raise GitException(f"Git: Failed to checkout revision: '{revision}'") from exc
+
+		revision = self.find_sha1(revision)
+		print(revision)
+		reset(self.repo_dir(), "hard", revision)
+
 
 	def git_archive(self, branch: str):
 		# Note: github's implementation of git, does NOT SUPPORT it
@@ -337,28 +366,26 @@ class GITFS(OSFS):
 		if self.effective_date:
 			return "HEAD"
 
-		cmd = ["rev-parse", "--abbrev-ref", "HEAD"]
 		try:
-			return self.git_exec(cmd)
-		except Exception as exc:
-			raise GitException(f"Git: Unable to determine current branch") from exc
+			branch = active_branch(self.repo_dir())
+		except:
+			return "HEAD"
 
+		if isinstance(branch, list):
+			branch = branch[0]
+
+		if isinstance(branch, bytes):
+			branch = branch.decode("utf-8", "ignore")
+
+		return branch
 
 	def current_revision(self, short: bool=True) -> str:
 		"""Determine the current branch name: git rev-parse HEAD
 
 		Which is the same as 'git branch --show-current' since git 2.22
 		"""
-
-		if short:
-			cmd = ["rev-parse", "--short", "HEAD"]
-		else:
-			cmd = ["rev-parse", "HEAD"]
-
-		try:
-			return self.git_exec(cmd)
-		except Exception as exc:
-			raise GitException(f"Git: Unable to determine current revision") from exc
+		with open_repo_closing(self.repo_dir()) as r:
+			return f"{find_unique_abbrev(r.object_store, r[r.head()].id)}"
 
 	def is_detached(self) -> bool:
 		"""Check whether the files are detached or related to a branch"""
@@ -373,9 +400,16 @@ class GITFS(OSFS):
 
 		try:
 			rtn = self.git_exec(cmd).strip()
-			return rtn == "HEAD"
+			x = rtn == "HEAD"
 		except Exception as exc:
 			raise GitException(f"Git: Unable to determine current revision") from exc
+
+		with open_repo_closing(self.repo_dir()) as r:
+			rtn = r.refs.follow(b"HEAD")
+			x2 = len(rtn[0]) < 2
+
+		assert x == x2
+		return x2
 
 	def close(self):
 		if self.auto_delete:

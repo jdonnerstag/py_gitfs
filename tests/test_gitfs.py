@@ -55,18 +55,22 @@ class Testing(GITFSTestCases, unittest.TestCase):
 		assert self.fs.git_exe is not None
 		assert self.fs.auto_delete == True
 		assert repr(self.fs) == "GITFS('https://github.com/jdonnerstag/py_gitfs.git', branch='master')"
+		assert self.fs.is_detached() == False
+		assert self.fs.current_branch() == "master"
 
 	def test_access_token(self):
 		access_token = "abc"
 		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, access_token=access_token)
 		assert access_token != self.fs.access_token
 		assert access_token == self.fs._get_access_token()
+		assert self.fs.is_detached() == False
+		assert self.fs.current_branch() == "master"
 
 	def test_invalid_url(self):
 		with self.assertRaises(GitException) as context:
-			fs = GITFS("https://wrong.com/does_not_exist", local_dir=self.local_dir)
+			self.fs = GITFS("https://wrong.com/does_not_exist", local_dir=self.local_dir)
 
-	def test_branch_param(self):
+	def test_branch(self):
 		branch = "test"
 		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, branch=branch)
 		assert self.fs.branch == branch
@@ -82,7 +86,10 @@ class Testing(GITFSTestCases, unittest.TestCase):
 		assert self.fs.is_detached() == True	# Release-tag; not a branch => detached
 		assert self.fs.current_branch() == "HEAD"
 
-	def test_revision_param(self):
+	def test_revision(self):
+		#branch = "dc587fe"
+		#self.fs = GITFS(self.git_repo, local_dir=self.local_dir, branch=branch)
+
 		revision = "dc587fe"
 		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, revision=revision)
 		assert self.fs.branch == "master"
