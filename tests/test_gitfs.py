@@ -28,10 +28,6 @@ class TestGITFS(FSTestCases, unittest.TestCase):
 		# _test=True Do not clone or update the repo
 		return GITFS(self.git_repo, local_dir=local_dir, _test=True)
 
-	def destroy_fs(self, fs: GITFS):
-		fs.delete_local_clone()
-		super().destroy_fs(fs)
-
 
 class GITFSTestCases:
 	git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
