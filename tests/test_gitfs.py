@@ -122,3 +122,7 @@ class Testing(GITFSTestCases, unittest.TestCase):
 	# Test: git export into a FS, including an in-memory fs.
 	# Test: opener with query parameter
 	# Test: re-use existing already exported repo
+
+	def test_dulwich(self):
+		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, _test=True)
+		self.fs.dulwich_init()

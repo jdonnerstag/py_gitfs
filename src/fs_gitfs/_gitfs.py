@@ -16,6 +16,9 @@ from urllib.parse import SplitResult
 
 from fs.osfs import OSFS
 
+from dulwich.repo import Repo
+from dulwich.client import HttpGitClient
+from dulwich.porcelain import clone as git_clone, NoneStream
 
 logger = logging.getLogger(name="git")
 
@@ -155,7 +158,6 @@ class GITFS(OSFS):
 		if req.username:
 			access_token = req.username
 			req = self.replace_access_token(req, None)
-			git_url = req.geturl()
 
 		# We want the access_token 'encrypted' also in-mem
 		access_token = encode_access_token(access_token)
@@ -251,24 +253,34 @@ class GITFS(OSFS):
 	def git_clone(self, git_url: SplitResult|str, branch: str|None):
 		"""Clone the repo"""
 
-		if isinstance(git_url, str):
-			git_url = urllib.parse.urlsplit(git_url)
+		if isinstance(git_url, SplitResult):
+			git_url = git_url.geturl()
 
-		cwd = self.local_dir.joinpath(self.repo_name, ".git")
-		if cwd.is_dir():
-			raise GitException(f"Git: Local git repo already exists: {cwd}")
+		git_dir = self.local_dir.joinpath(self.repo_name, ".git")
+		if git_dir.is_dir():
+			raise GitException(f"Git: Local git repo already exists: {git_dir}")
 
 		access_token = self._get_access_token()
-		req = self.replace_access_token(git_url, access_token)
-		new_url = req.geturl()
-
+		repo_dir = self.local_dir.joinpath(self.repo_name)
+		depth = None
 		if branch:
-			cmd = ["clone", new_url, "--depth", "1", "--branch", branch]
-		else:
-			cmd = ["clone", new_url]
+			depth = 1
 
 		try:
-			self.git_exec(cmd, True)
+			# Make sure the repo gets properly closed and (files) get closed
+			with git_clone(
+				git_url,
+				repo_dir,
+				branch=branch,
+				checkout=True,
+				depth=depth,
+				password=access_token,
+				errstream=NoneStream()
+			) as repo:
+				
+				index = repo.open_index()
+				print(index.path)
+
 		except Exception as exc:
 			raise GitException(f"Git: Unable to clone git repo: '{git_url}'") from exc
 
@@ -378,3 +390,10 @@ class GITFS(OSFS):
 			branch=(self.branch, None),
 			effective_date=(self.effective_date, None)
 		)
+
+	def dulwich_init(self):
+		repo_dir = self.local_dir.joinpath(self.repo_name)
+		with git_clone(self.git_url.geturl(), str(repo_dir), branch="master", checkout=True, errstream=NoneStream()) as repo:
+			index = repo.open_index()
+			print(index.path)
+			print(list(index))
