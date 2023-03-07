@@ -6,6 +6,7 @@ import os
 import stat
 import tempfile
 import shutil
+from typing import Optional, Union
 import urllib
 import logging
 import io
@@ -17,8 +18,13 @@ from urllib.parse import SplitResult
 from fs.osfs import OSFS
 
 from dulwich.repo import Repo
-from dulwich.client import HttpGitClient
-from dulwich.porcelain import clone as git_clone, NoneStream, open_repo_closing, describe, find_unique_abbrev, active_branch, reset
+from dulwich.client import HttpGitClient, get_transport_and_path
+from dulwich.porcelain import clone as git_clone, NoneStream, open_repo_closing, find_unique_abbrev, active_branch, reset
+from dulwich.porcelain import default_bytes_err_stream
+from dulwich.porcelain import DEFAULT_ENCODING
+from dulwich.config import Config, ConfigFile, StackedConfig
+from dulwich.objectspec import parse_tree
+
 
 logger = logging.getLogger(name="git")
 
@@ -135,7 +141,8 @@ class GITFS(OSFS):
 		*,
 		branch: str = 'master',
 		revision: str|None = None,
-		access_token: str|None = os.environ.get("GIT_ACCESS_TOKEN", None),
+		username: str|None = None,
+		password: str|None = os.environ.get("GIT_ACCESS_TOKEN", None),
 		local_dir: os.PathLike = tempfile.mkdtemp(),
 		effective_date: datetime|None = None,
 		git_exe: str = "git",
@@ -156,11 +163,10 @@ class GITFS(OSFS):
 			self.repo_name = os.path.basename(self.repo_name)[:-4]
 
 		if req.username:
-			access_token = req.username
-			req = self.replace_access_token(req, None)
+			req = self.replace_credentials(req, None, None)
 
 		# We want the access_token 'encrypted' also in-mem
-		access_token = encode_access_token(access_token)
+		password = encode_access_token(password)
 
 		assert local_dir
 		assert os.path.isdir(local_dir), f"Not a valid local directory: {local_dir}"
@@ -177,7 +183,8 @@ class GITFS(OSFS):
 		assert os.path.exists(git_exe)
 
 		self.git_url = req
-		self.access_token = access_token
+		self.username = username
+		self.password = password
 		self.branch = branch
 		self.revision = revision
 		self.local_dir = Path(local_dir)
@@ -193,40 +200,42 @@ class GITFS(OSFS):
 	def repo_dir(self) -> Path:
 		return self.local_dir.joinpath(self.repo_name)
 
-	def replace_access_token(self, req: SplitResult, token: str|None) -> SplitResult:
+	def replace_credentials(self, req: SplitResult, username: str|None, password: str|None) -> SplitResult:
 		"""
-		Replace the access-token (or username/password) in the URL
+		Replace username and/or password in the URL
 		"""
 		netloc = req.netloc.split("@", maxsplit=1)[-1]
-		if token:
-			netloc = f"{token}@{netloc}"
-		return req._replace(netloc=netloc)
+		rtn = ""
+		if username:
+			rtn = username
+
+		if password:
+			if rtn:
+				rtn += ":"
+
+			rtn += password
+
+		if rtn:
+			rtn += "@"
+
+		rtn += netloc
+		return req._replace(netloc=rtn)
 
 	def update(self):
 		"""Checkout from git"""
 
 		# Clone or refresh the local git repo
-		git_dir = self.local_dir.joinpath(self.repo_name, ".git")
+		git_dir = self.repo_dir().joinpath(".git")
 		if git_dir.is_dir():
-			if self.branch:
-				current_branch = self.current_branch()
-				if current_branch != self.branch:
-					raise GitException(f"Existing git repo and GITFS config don't match: {current_branch} != {self.branch}")
+			# TODO Check that the repo URL is the same
 
-			# Determine the revision, if an effective date was provided
-			if self.effective_date:
-				self.revision = self.determine_revision(self.effective_date, self.branch)
+			# TODO How do I know it is shallow (depth=1) and I need to fetch all?
 
-			if self.revision:
-				current_revision = self.current_revision()
-				if current_revision != self.revision:
-					raise GitException(f"Existing git repo and GITFS config don't match: {current_revision} != {self.revision}")
-
-			return
-
-		# We can clone and checkout in one go, except if it is a revision
-		branch = None if self.effective_date or self.revision else self.branch
-		self.git_clone(self.git_url, branch)
+			pass
+		else:
+			# We can clone and checkout in one go, except if it is a revision
+			branch = None if self.effective_date or self.revision else self.branch
+			self.git_clone(self.git_url, None)
 
 		# Determine the revision, if an effective date was provided
 		if self.effective_date:
@@ -293,21 +302,21 @@ class GITFS(OSFS):
 		except Exception as exc:
 			raise GitException(f"Git: Failed to checkout branch: '{branch}'") from exc
 
-	def find_sha1(self, short: str | bytes) -> bytes:
-		if len(short) >= 20:
-			return [short]
+	def find_sha1(self, sha1: str | bytes) -> bytes:
+		if isinstance(sha1, str):
+			sha1 = sha1.encode("utf-8")
 
-		if isinstance(short, str):
-			short = short.encode("utf-8")
+		if len(sha1) >= 20:
+			return sha1
 
 		objs = []
 		with open_repo_closing(self.repo_dir()) as repo:
 			for obj in repo.object_store:
-				if obj[:len(short)] == short:
+				if obj[:len(sha1)] == sha1:
 					objs.append(obj)
 
 		if not objs:
-			raise GitException(f"Git object not found: '{short}'")
+			raise GitException(f"Git object not found: '{sha1}'")
 		elif len(objs) != 1:
 			raise GitException(f"Found multiple Git objects: '{objs}'")
 
@@ -315,11 +324,6 @@ class GITFS(OSFS):
 
 
 	def git_checkout_revision(self, revision: str):
-		try:
-			self.git_exec(["reset", "--hard", revision])
-		except Exception as exc:
-			raise GitException(f"Git: Failed to checkout revision: '{revision}'") from exc
-
 		revision = self.find_sha1(revision)
 		print(revision)
 		reset(self.repo_dir(), "hard", revision)
@@ -425,9 +429,103 @@ class GITFS(OSFS):
 			effective_date=(self.effective_date, None)
 		)
 
-	def dulwich_init(self):
-		repo_dir = self.local_dir.joinpath(self.repo_name)
-		with git_clone(self.git_url.geturl(), str(repo_dir), branch="master", checkout=True, errstream=NoneStream()) as repo:
-			index = repo.open_index()
-			print(index.path)
-			print(list(index))
+	def my_new_clone(self,
+		source,
+		target=None,
+		errstream=default_bytes_err_stream,
+		origin: Optional[str] = "origin",
+		depth: Optional[int] = None,
+		branch: Optional[Union[str, bytes]] = None,
+		single_commit: Optional[Union[str, bytes]] = None,
+		config: Optional[Config] = None,
+		**kwargs
+	):
+		"""Clone a local or remote git repository.
+		"""
+		if config is None:
+			config = StackedConfig.default()
+
+		if target is None:
+			target = source.split("/")[-1]
+
+		mkdir = not os.path.exists(target)
+
+		(client, path) = get_transport_and_path(
+			source, config=config, **kwargs)
+
+		return self.my_new_client_clone(
+			client,
+			path,
+			target,
+			mkdir=mkdir,
+			origin=origin,
+			checkout=True,
+			branch=branch,
+			progress=errstream.write,
+			depth=depth,
+			single_branch=True,
+			single_commit=single_commit
+		)
+
+
+	def my_new_client_clone(self, client, path, target_path, mkdir: bool = True, origin="origin",
+			  checkout:bool=True, branch=None, progress=None, depth=None, single_branch: bool=False,
+			  single_commit=None):
+		"""Clone a repository."""
+		from dulwich.refs import _set_default_branch, _set_head, _set_origin_head, _import_remote_refs
+		from dulwich.client import LocalGitClient, SubprocessGitClient
+
+		HEAD = b"HEAD"
+
+		if mkdir:
+			os.mkdir(target_path)
+
+		try:
+			target = Repo.init(target_path)
+			assert target is not None
+			assert branch
+
+			encoded_path = path if isinstance(self, (LocalGitClient, SubprocessGitClient)) else client.get_url(path)
+			encoded_path = encoded_path.encode(DEFAULT_ENCODING)
+
+			encoded_origin = origin.encode(DEFAULT_ENCODING)
+			config_section = (b"remote", encoded_origin)
+			branch_ref = branch if single_branch else "*"
+			if single_commit is None:
+				encoded_fetch_refs = (f"+refs/heads/{branch_ref}:refs/remotes/{origin}/{branch_ref}")
+			else:
+				encoded_fetch_refs = (f"{single_commit}:refs/remotes/{origin}/{branch}")
+			encoded_fetch_refs = encoded_fetch_refs.encode(DEFAULT_ENCODING)
+			target_config = target.get_config()
+			target_config.set(config_section, b"url", encoded_path)
+			target_config.set(config_section, b"fetch", encoded_fetch_refs)
+			target_config.write_to_path()
+
+			ref_message = b"clone: from " + encoded_path
+			result = client.fetch(path, target, progress=progress, depth=depth)
+			_import_remote_refs(target.refs, origin, result.refs, message=ref_message)
+
+			origin_head = result.symrefs.get(HEAD)
+			origin_sha = result.refs.get(HEAD)
+			if (origin_sha and not origin_head) or single_commit:
+				# set detached HEAD
+				target.refs[HEAD] = head_ref = origin_sha
+			else:
+				_set_origin_head(target.refs, encoded_origin, origin_head)
+				encoded_branch = branch.encode(DEFAULT_ENCODING)
+				head_ref = _set_default_branch(target.refs, encoded_origin, origin_head, encoded_branch, ref_message)
+
+			# Update target head
+			_set_head(target.refs, head_ref, ref_message)
+			if checkout:
+				tree = parse_tree(target, head_ref)
+				target.reset_index(tree.id)
+
+		except BaseException:
+			if target is not None:
+				target.close()
+			if mkdir:
+				shutil.rmtree(target_path)
+			raise
+
+		return target

@@ -13,6 +13,7 @@ from nose.plugins.attrib import attr
 from fs.test import FSTestCases
 from fs_gitfs import GITFS, GitException, delete_repo
 import tempfile
+from dulwich.porcelain import NoneStream
 
 
 class TestGITFS(FSTestCases, unittest.TestCase):
@@ -125,6 +126,42 @@ class Testing(GITFSTestCases, unittest.TestCase):
 
 		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, branch="master", auto_delete=False)
 		self.fs.close()
+
+	def test_my_new_clone_1(self):
+		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, _test=True)
+		with self.fs.my_new_clone(
+			self.git_repo,
+			target=self.local_dir,
+			errstream=NoneStream(),
+			branch="master",
+			depth=1) as repo:
+			pass
+
+		assert self.fs
+
+	def test_my_new_clone_2(self):
+		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, _test=True)
+		with self.fs.my_new_clone(
+			self.git_repo,
+			target=self.local_dir,
+			errstream=NoneStream(),
+			branch="test",
+			depth=1) as repo:
+			pass
+
+	def test_my_new_clone_3(self):
+		self.fs = GITFS(self.git_repo, local_dir=self.local_dir, _test=True)
+		with self.fs.my_new_clone(
+			self.git_repo,
+			target=self.local_dir,
+			errstream=NoneStream(),
+			branch="dummy",
+			single_commit="dc587fe9910c21b18cf1116d4116e21ff90b6bf0",
+			depth=1) as repo:
+			pass
+
+		assert self.fs
+
 
 	# Test: git export into a FS, including an in-memory fs.
 	# Test: opener with query parameter
