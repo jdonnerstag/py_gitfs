@@ -103,7 +103,7 @@ def _make_repr(class_name, *args, **kwargs):
 __char_map_1 = "abcdefghijklmnopqrstupvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 __char_map_2 = "89abcdefghijklmnopqrstupvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234567"
 
-def map_access_token(token: str|None, map_1: str, map_2: str) -> str|None:
+def map_password(token: str|None, map_1: str, map_2: str) -> str|None:
 	if token is None:
 		return None
 
@@ -114,21 +114,22 @@ def map_access_token(token: str|None, map_1: str, map_2: str) -> str|None:
 
 	return data.getvalue()
 
-def encode_access_token(token: str|None) -> str|None:
-	return map_access_token(token, __char_map_1, __char_map_2)
+def encode_password(token: str|None) -> str|None:
+	return map_password(token, __char_map_1, __char_map_2)
 
-def decode_access_token(token: str|None) -> str|None:
-	return map_access_token(token, __char_map_2, __char_map_1)
+def decode_password(token: str|None) -> str|None:
+	return map_password(token, __char_map_2, __char_map_1)
 
 
 class GITFS(OSFS):
 	"""
-	Construct an git filesystem for
+	Construct a git filesystem for
 	`PyFilesystem2 <https://pyfilesystem.org>`_
 
-	:param str git_url: The got repository (url or directory)
+	:param str git_url: The source git repository (url or directory)
 	:param str branch: git branch name, release-tag or revision string (default: 'master')
-	:param str access_token: github (user) access token
+	:param str username: user name
+	:param str password: user password (or access token)
 	:param Datetime effective_date: Determine the last revision prior to the datetime (default: none)
 	:param bool create: If true, then create the directory (default: True)
 	:param int create_mode: If the directory must be created, apply the directory permissions (rwxrwxrwx)
@@ -165,8 +166,8 @@ class GITFS(OSFS):
 		if req.username:
 			req = self.replace_credentials(req, None, None)
 
-		# We want the access_token 'encrypted' also in-mem
-		password = encode_access_token(password)
+		# We want the password 'encrypted' also in-mem
+		password = encode_password(password)
 
 		assert local_dir
 		assert os.path.isdir(local_dir), f"Not a valid local directory: {local_dir}"
@@ -193,8 +194,13 @@ class GITFS(OSFS):
 		self.auto_delete = auto_delete
 
 		if not _test:
-			self.update()
+			self.export_files()
 
+		# TODO possible to hide .git directory?
+		# TODO make FS read-only
+		# TODO github does not support the archiv command. We are basically faking it
+		# Theoretically there is not need to checkout. As long as we would have
+		# the directory listing and access to the files?
 		super(GITFS, self).__init__(self.local_dir, create=create, create_mode=create_mode, expand_vars=expand_vars)
 
 	def repo_dir(self) -> Path:
@@ -224,18 +230,14 @@ class GITFS(OSFS):
 	def update(self):
 		"""Checkout from git"""
 
-		# Clone or refresh the local git repo
-		git_dir = self.repo_dir().joinpath(".git")
-		if git_dir.is_dir():
-			# TODO Check that the repo URL is the same
+		repo = Repo.init(self.repo_dir(), mkdir=True)
 
-			# TODO How do I know it is shallow (depth=1) and I need to fetch all?
+		# TODO Check that the repo URL is the same (in case the repo is an existing one)
 
-			pass
-		else:
-			# We can clone and checkout in one go, except if it is a revision
-			branch = None if self.effective_date or self.revision else self.branch
-			self.git_clone(self.git_url, None)
+
+		# We can clone and checkout in one go, except if it is a revision
+		branch = None if self.effective_date or self.revision else self.branch
+		self.git_clone(self.git_url, None)
 
 		# Determine the revision, if an effective date was provided
 		if self.effective_date:
@@ -259,8 +261,8 @@ class GITFS(OSFS):
 		return execute_child_process(cmd, cwd)
 
 	# We must be able to test it :(
-	def _get_access_token(self) -> str:
-		return decode_access_token(self.access_token)
+	def _get_password(self) -> str:
+		return decode_password(self.password)
 
 	def git_clone(self, git_url: SplitResult|str, branch: str|None):
 		"""Clone the repo"""
@@ -272,7 +274,7 @@ class GITFS(OSFS):
 		if git_dir.is_dir():
 			raise GitException(f"Git: Local git repo already exists: {git_dir}")
 
-		access_token = self._get_access_token()
+		password = self._get_password()
 		repo_dir = self.repo_dir()
 		depth = None
 		if branch:
@@ -286,7 +288,7 @@ class GITFS(OSFS):
 				branch=branch,
 				checkout=True,
 				depth=depth,
-				password=access_token,
+				password=password,
 				errstream=NoneStream()
 			) as repo:
 
@@ -332,8 +334,8 @@ class GITFS(OSFS):
 	def git_archive(self, branch: str):
 		# Note: github's implementation of git, does NOT SUPPORT it
 
-		access_token = self._get_access_token()
-		req = self.replace_access_token(self.git_url, access_token)
+		password = self._get_password()
+		req = self.replace_password(self.git_url, password)
 		new_url = req.geturl()
 
 		try:

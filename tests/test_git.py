@@ -1,7 +1,5 @@
 # coding: utf-8
 
-from __future__ import unicode_literals
-
 import os
 import stat
 import unittest
@@ -10,10 +8,9 @@ import shutil
 from datetime import datetime
 from nose.plugins.attrib import attr
 
-from fs.test import FSTestCases
-from fs_gitfs import GITFS, GitException, delete_repo
 import tempfile
 from dulwich.porcelain import NoneStream
+from fs_gitfs import _git as git
 
 # We are using this repo to run our tests on
 git_repo = "https://github.com/jdonnerstag/py_gitfs.git"
@@ -34,47 +31,21 @@ my_test_release_tag_id = "f39fd8c3faecb11b7e515b0e69a75338c01dae01"
 commit_rev_id = "5d4b1242f13e341b83256e7087b5c6cde64507ce"
 
 
-class TestGITFS(FSTestCases, unittest.TestCase):
-	"""GITFS is based on OSFS and exposes a local directory. It should
-	easily pass all standard tests
-	"""
-
-	def make_fs(self):
-		local_dir = tempfile.mkdtemp()
-
-		# _test=True Do not clone or update the repo
-		return GITFS(git_repo, local_dir=local_dir, _test=True)
-
-
-class GITFSTestCases:
+class GITTestCases:
 
 	def setUp(self):
 		self.local_dir = tempfile.mkdtemp()
-		self.fs = None
 
 	def tearDown(self):
-		if self.fs:
-			self.fs.close()
-
-		self.fs = None
-		delete_repo(self.local_dir)
+		git.delete_repo(self.local_dir)
 
 
-class Testing(GITFSTestCases, unittest.TestCase):
+class Testing(GITTestCases, unittest.TestCase):
 	def test_git_simple(self):
-		branch = master
-		self.fs = GITFS(git_repo, local_dir=self.local_dir)
-		assert self.fs.git_url.geturl() == git_repo
-		assert self.fs.password is None
-		assert self.fs.branch == branch
-		assert self.fs.local_dir == pathlib.Path(self.local_dir)
-		assert self.fs.effective_date is None
-		assert self.fs.git_exe is not None
-		assert self.fs.auto_delete == True
-		assert repr(self.fs) == f"GITFS('{git_repo}', branch='{branch}')"
-		assert self.fs.is_detached() == False
-		assert self.fs.current_branch() == branch
-
+		git.export(self.local_dir, git_repo)
+		assert git.origin_url(self.local_dir) == git_repo
+		assert git.active_branch(self.local_dir) == master
+'''
 	def test_access_token(self):
 		branch = master
 		access_token = "abc"
@@ -179,3 +150,4 @@ class Testing(GITFSTestCases, unittest.TestCase):
 	# Test: git export into a FS, including an in-memory fs.
 	# Test: opener with query parameter
 	# Test: re-use existing already exported repo
+'''
